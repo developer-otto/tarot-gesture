@@ -235,33 +235,47 @@ function drawCard(
 // ─── Gesture Detection ─────────────────────────────────────────────────────────
 
 function detectFingers(lm: { x: number; y: number; z: number }[]): number {
-  const tips = [8, 12, 16, 20]
-  const pips = [6, 10, 14, 18]
-  return tips.filter((t, i) => lm[t].y < lm[pips[i]].y).length
+  // tip above pip = extended
+  const pairs: [number, number][] = [[8,6],[12,10],[16,14],[20,18]]
+  return pairs.filter(([tip, pip]) => lm[tip].y < lm[pip].y).length
 }
 
-function thumbOpen(lm: { x: number; y: number; z: number }[]): boolean {
-  return Math.abs(lm[4].x - lm[2].x) > 0.05
+function thumbExtended(lm: { x: number; y: number; z: number }[]): boolean {
+  // thumb tip clearly away from index MCP
+  const dx = lm[4].x - lm[5].x
+  const dy = lm[4].y - lm[5].y
+  return Math.sqrt(dx*dx + dy*dy) > 0.08
 }
 
-function fingerGap(lm: { x: number; y: number; z: number }[]): number {
+// Average gap between adjacent fingertips (index→middle→ring→pinky)
+function tipSpread(lm: { x: number; y: number; z: number }[]): number {
   const tips = [8, 12, 16, 20]
   let sum = 0
   for (let i = 0; i < tips.length - 1; i++) {
-    const dx = lm[tips[i]].x - lm[tips[i + 1]].x
-    const dy = lm[tips[i]].y - lm[tips[i + 1]].y
-    sum += Math.sqrt(dx * dx + dy * dy)
+    const dx = lm[tips[i]].x - lm[tips[i+1]].x
+    const dy = lm[tips[i]].y - lm[tips[i+1]].y
+    sum += Math.sqrt(dx*dx + dy*dy)
   }
-  return sum
+  return sum / 3  // average gap
 }
 
 function classify(lm: { x: number; y: number; z: number }[]): Gesture {
-  const up = detectFingers(lm)
-  const th = thumbOpen(lm)
-  const gap = fingerGap(lm)
+  const up   = detectFingers(lm)
+  const th   = thumbExtended(lm)
+  const gap  = tipSpread(lm)
+
+  // Fist: all 4 fingers curled, thumb tucked
   if (up === 0 && !th) return 'fist'
-  if (up === 4 && th && gap > 0.18) return 'open'
-  if (up === 4 && th && gap < 0.10) return 'close'
+
+  // Need all 4 fingers extended for open/close
+  if (up < 3) return 'unknown'
+
+  // Open: fingers spread apart (fan out)
+  if (gap > 0.055) return 'open'
+
+  // Close: fingers pressed together
+  if (gap < 0.030) return 'close'
+
   return 'unknown'
 }
 
@@ -329,7 +343,7 @@ export default function TarotGesture() {
     const vw = vwRef.current, vh = vhRef.current
     cardsRef.current = spreadTargets(cardsRef.current, vw, vh)
     goPhase('spread')
-    setHint('五指张开散牌  ·  五指并拢聚合')
+    setHint('五指张开：牌面散开  ·  五指并拢：聚合洗牌  ·  握拳：选牌')
   }, [goPhase])
 
   // ── GATHER: cards fly inward, loosely clustered ──────────────────────────────
@@ -341,7 +355,7 @@ export default function TarotGesture() {
       vw, vh
     )
     goPhase('gather')
-    setHint(thenSpread ? '洗牌中...' : '五指并拢聚合  ·  五指张开散开')
+    setHint(thenSpread ? '洗牌中，稍候散开...' : '牌堆聚合中  ·  五指张开散开牌堆')
     setPickedSnap([])
     if (thenSpread) {
       setTimeout(() => {
@@ -352,13 +366,13 @@ export default function TarotGesture() {
 
   // ── PICK: fist → pick random 1-5 cards from gathered pile ────────────────────
 
+  // ── PICK: fist in SPREAD phase → pick 1-5 random cards ──────────────────────
   const doPick = useCallback(() => {
-    if (phaseRef.current !== 'gather') return
+    if (phaseRef.current !== 'spread') return  // 只有散开时才能握拳选牌
     const now = Date.now()
     if (now - lastTrigger.current < COOLDOWN) return
     lastTrigger.current = now
 
-    // How many: 1-5 based on time since last action (or random)
     const n = Math.floor(Math.random() * 5) + 1
 
     const shuffled = [...cardsRef.current].sort(() => Math.random() - 0.5)
@@ -374,7 +388,7 @@ export default function TarotGesture() {
     })
 
     goPhase('selected')
-    setHint(`已选 ${n} 张  ·  握拳开始结算`)
+    setHint('✦ 已选 ' + n + ' 张命运之牌  ·  握拳开始结算')
     syncPicked()
   }, [goPhase, syncPicked])
 
@@ -429,7 +443,8 @@ export default function TarotGesture() {
       doSpread(); lastTrigger.current = now
     } else if (g === 'close' && cool) {
       doGather(false); lastTrigger.current = now
-    } else if (g === 'fist' && ph === 'gather') {
+    } else if (g === 'fist' && ph === 'spread') {
+      // 散开状态下握拳 = 选牌
       doPick()
     }
   }, [doSpread, doGather, doPick, doReveal])
@@ -606,12 +621,12 @@ export default function TarotGesture() {
       const vw = window.innerWidth, vh = window.innerHeight
       vwRef.current = vw; vhRef.current = vh
       const deck = buildDeck()
-      // Start all cards at center
+      // 初始：牌从中心散开
       const cx = vw / 2, cy = (vh - SLOT_H - HINT_H) / 2
       deck.forEach(c => { c.x = cx + (Math.random()-0.5)*60; c.y = cy + (Math.random()-0.5)*60 })
-      cardsRef.current = gatherTargets(deck, vw, vh)
-      goPhase('gather')
-      setHint('五指张开散开牌堆  ·  五指并拢聚合')
+      cardsRef.current = spreadTargets(deck, vw, vh)
+      goPhase('spread')
+      setHint('五指张开：牌面散开  ·  五指并拢：聚合洗牌  ·  握拳：选牌')
     }
 
     load()
