@@ -1,316 +1,230 @@
-/* ── Layout ────────────────────────────────────────────────────────────────── */
+/* ── Base ─────────────────────────────────────────────────────────────────── */
 
 .app {
-  position: relative;
+  position: fixed;
+  inset: 0;
+  background: #060310;
+  overflow: hidden;
+  font-family: 'Noto Serif SC', 'Noto Serif', serif;
+}
+
+/* ── Stars ───────────────────────────────────────────────────────────────── */
+
+.star {
+  position: fixed;
+  border-radius: 50%;
+  background: #f0d080;
+  pointer-events: none;
+  animation: twinkle 3s infinite;
+}
+
+@keyframes twinkle {
+  0%, 100% { opacity: 0.08; transform: scale(1); }
+  50%       { opacity: 0.55; transform: scale(1.6); }
+}
+
+/* ── Full-screen card canvas ─────────────────────────────────────────────── */
+
+.cardCanvas {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
   z-index: 1;
-  width: 100vw;
-  height: 100vh;
+}
+
+/* ── Cam preview ─────────────────────────────────────────────────────────── */
+
+.camPreviewWrap {
+  position: fixed;
+  top: 14px;
+  right: 14px;
+  z-index: 20;
   display: flex;
   flex-direction: column;
   align-items: center;
-  overflow: hidden;
+  gap: 5px;
 }
 
-/* ── Loading overlay ──────────────────────────────────────────────────────── */
+.camPreview {
+  width: 140px;
+  height: 105px;
+  border-radius: 8px;
+  border: 1px solid rgba(107, 79, 187, 0.4);
+  display: block;
+  background: #0a0614;
+}
+
+.gestureLabel {
+  font-size: 13px;
+  color: #c9a84c;
+  letter-spacing: 1px;
+  text-align: center;
+  text-shadow: 0 0 8px rgba(201,168,76,0.5);
+  min-height: 18px;
+}
+
+/* ── Cam error ───────────────────────────────────────────────────────────── */
+
+.camError {
+  position: fixed;
+  top: 14px;
+  left: 14px;
+  z-index: 20;
+  background: rgba(163, 45, 45, 0.25);
+  border: 1px solid rgba(163, 45, 45, 0.5);
+  border-radius: 20px;
+  padding: 5px 14px;
+  font-size: 12px;
+  color: #f09595;
+  letter-spacing: 1px;
+}
+
+/* ── Loading ─────────────────────────────────────────────────────────────── */
 
 .loadingOverlay {
   position: fixed;
   inset: 0;
-  background: var(--deep);
+  background: #060310;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  z-index: 200;
-  gap: 20px;
+  gap: 18px;
+  z-index: 100;
 }
 
 .spinner {
-  width: 48px;
-  height: 48px;
-  border: 2px solid rgba(201, 168, 76, 0.2);
-  border-top-color: var(--gold);
+  width: 46px;
+  height: 46px;
+  border: 2px solid rgba(201, 168, 76, 0.18);
+  border-top-color: #c9a84c;
   border-radius: 50%;
   animation: spin 1s linear infinite;
 }
 
-.loadingTitle {
-  font-family: 'Cinzel', serif;
-  color: var(--gold);
-  font-size: 24px;
-  letter-spacing: 4px;
-}
+@keyframes spin { to { transform: rotate(360deg); } }
 
-.loadingHint {
-  color: var(--muted);
-  font-size: 13px;
-}
-
-/* ── Reveal overlay ───────────────────────────────────────────────────────── */
-
-.revealOverlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(5, 2, 15, 0);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 100;
-  pointer-events: none;
-  transition: background 0.5s;
-}
-
-.revealActive {
-  background: rgba(5, 2, 15, 0.7);
-}
-
-.revealMsg {
-  font-family: 'Cinzel', serif;
-  font-size: 32px;
-  color: var(--gold);
-  text-shadow: 0 0 40px rgba(201, 168, 76, 0.6);
-  opacity: 0;
-  transform: scale(0.7);
-  transition: opacity 0.5s, transform 0.5s;
-  letter-spacing: 6px;
-}
-
-.revealActive .revealMsg {
-  opacity: 1;
-  transform: scale(1);
-}
-
-/* ── Header ───────────────────────────────────────────────────────────────── */
-
-.header {
-  padding: 12px 0 8px;
-  text-align: center;
-}
-
-.title {
-  font-family: 'Cinzel', serif;
-  font-size: 22px;
-  color: var(--gold);
-  letter-spacing: 4px;
+.loadTitle {
+  font-family: 'Cinzel', 'Georgia', serif;
+  font-size: 26px;
+  color: #c9a84c;
+  letter-spacing: 5px;
   text-shadow: 0 0 20px rgba(201, 168, 76, 0.4);
-  font-weight: 600;
 }
 
-/* ── Status bar ───────────────────────────────────────────────────────────── */
-
-.statusBar {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  padding: 6px 24px;
-  background: rgba(26, 15, 53, 0.8);
-  border: 1px solid rgba(107, 79, 187, 0.3);
-  border-radius: 30px;
-  margin: 6px 0;
-  min-width: 400px;
-  justify-content: center;
-}
-
-.gestureIcon {
-  font-size: 28px;
-  width: 40px;
-  text-align: center;
-  transition: transform 0.2s;
-}
-
-.statusText {
-  font-size: 14px;
-  color: var(--text);
+.loadHint {
+  font-size: 13px;
+  color: #8b7ab8;
   letter-spacing: 1px;
 }
 
-.statusText b {
-  color: var(--gold);
-  font-weight: 600;
-}
+/* ── Hint bar ─────────────────────────────────────────────────────────────── */
 
-/* ── Main ─────────────────────────────────────────────────────────────────── */
-
-.main {
-  display: flex;
-  flex: 1;
-  width: 100%;
-  gap: 12px;
-  padding: 0 12px;
-  align-items: flex-start;
-}
-
-/* ── Camera / table area ──────────────────────────────────────────────────── */
-
-.tableArea {
-  position: relative;
-  flex: 1;
-}
-
-.camCanvas {
-  width: 100%;
-  max-width: 640px;
-  border-radius: 12px;
-  border: 1px solid rgba(107, 79, 187, 0.3);
-  display: block;
-  transform: scaleX(-1);
-  opacity: 0.4;
-}
-
-.cardTable {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-}
-
-/* ── Tarot cards ──────────────────────────────────────────────────────────── */
-
-.tarotCard {
-  position: absolute;
-  width: 52px;
-  height: 80px;
-  border-radius: 6px;
-  border: 1.5px solid var(--card-border);
-  background: var(--card-back);
-  transition:
-    left 0.9s cubic-bezier(0.34, 1.56, 0.64, 1),
-    top 0.9s cubic-bezier(0.34, 1.56, 0.64, 1),
-    transform 0.9s cubic-bezier(0.34, 1.56, 0.64, 1),
-    opacity 0.5s;
-  transform-origin: center center;
-  overflow: hidden;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-}
-
-.tarotCard::before {
-  content: '';
-  position: absolute;
-  inset: 3px;
-  border-radius: 3px;
-  border: 1px solid rgba(201, 168, 76, 0.25);
-  background:
-    repeating-linear-gradient(
-      45deg,
-      transparent,
-      transparent 6px,
-      rgba(107, 79, 187, 0.06) 6px,
-      rgba(107, 79, 187, 0.06) 7px
-    ),
-    repeating-linear-gradient(
-      -45deg,
-      transparent,
-      transparent 6px,
-      rgba(107, 79, 187, 0.04) 6px,
-      rgba(107, 79, 187, 0.04) 7px
-    );
-}
-
-.tarotCard::after {
-  content: '✦';
-  position: absolute;
-  inset: 0;
+.hintBar {
+  position: fixed;
+  bottom: 148px;   /* sits right above slotZone */
+  left: 0;
+  right: 0;
+  height: 40px;
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 14px;
+  z-index: 10;
+  background: linear-gradient(to top, rgba(6,3,16,0.95) 0%, rgba(6,3,16,0) 100%);
+  pointer-events: none;
+}
+
+.hintText {
+  font-size: 13px;
+  color: #b8a8e0;
+  letter-spacing: 0.5px;
+  text-shadow: 0 1px 4px rgba(0,0,0,0.8);
+}
+
+.cdBadge {
+  font-family: 'Cinzel', 'Georgia', serif;
   font-size: 20px;
-  color: rgba(201, 168, 76, 0.3);
-}
-
-.tarotCardPicked {
-  opacity: 0 !important;
-  transform: scale(0) !important;
-  transition: opacity 0.3s, transform 0.3s !important;
-}
-
-/* ── Guide panel ──────────────────────────────────────────────────────────── */
-
-.guidePanel {
-  width: 130px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding-top: 4px;
-}
-
-.guideItem {
-  background: rgba(26, 15, 53, 0.7);
-  border: 1px solid rgba(107, 79, 187, 0.25);
-  border-radius: 10px;
-  padding: 10px;
+  font-weight: 700;
+  color: #c9a84c;
+  text-shadow: 0 0 12px rgba(201,168,76,0.7);
+  min-width: 28px;
   text-align: center;
-  transition: border-color 0.3s, background 0.3s;
+  animation: cdPulse 1s ease-in-out infinite;
 }
 
-.guideActive {
-  border-color: var(--gold);
-  background: rgba(201, 168, 76, 0.08);
+@keyframes cdPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.7; transform: scale(0.9); }
 }
 
-.guideIcon {
-  font-size: 24px;
-  margin-bottom: 4px;
-}
+/* ── Slot zone ───────────────────────────────────────────────────────────── */
 
-.guideLabel {
-  font-size: 11px;
-  color: var(--muted);
-  line-height: 1.4;
-  transition: color 0.3s;
-}
-
-.guideActive .guideLabel {
-  color: var(--gold-light);
-}
-
-/* ── Slots ────────────────────────────────────────────────────────────────── */
-
-.slotsSection {
-  width: 100%;
+.slotZone {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 148px;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  padding: 8px 0 12px;
-  gap: 6px;
-}
-
-.slotsLabel {
-  font-family: 'Cinzel', serif;
-  font-size: 11px;
-  letter-spacing: 3px;
-  color: var(--muted);
+  justify-content: center;
+  z-index: 10;
+  background: linear-gradient(to top, rgba(6,3,16,1) 60%, rgba(6,3,16,0) 100%);
+  border-top: 1px solid rgba(107, 79, 187, 0.15);
 }
 
 .slots {
   display: flex;
-  gap: 12px;
+  gap: 14px;
   align-items: center;
+  padding-bottom: 8px;
 }
 
+/* ── Individual slot ─────────────────────────────────────────────────────── */
+
 .slot {
-  width: 58px;
-  height: 88px;
+  width: 64px;
+  height: 96px;
   border-radius: 8px;
-  border: 1.5px dashed rgba(107, 79, 187, 0.4);
-  background: rgba(26, 15, 53, 0.4);
+  border: 1.5px dashed rgba(107, 79, 187, 0.3);
+  background: rgba(18, 9, 42, 0.5);
+  position: relative;
+  perspective: 500px;
+  flex-shrink: 0;
+}
+
+.slotEmpty {
+  position: absolute;
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  position: relative;
-  perspective: 400px;
 }
 
-.slotNum {
-  font-size: 18px;
+.slotIdx {
+  font-family: 'Cinzel', 'Georgia', serif;
+  font-size: 16px;
   color: rgba(107, 79, 187, 0.3);
-  font-family: 'Cinzel', serif;
 }
+
+/* Filled slot */
+
+.slotFilled {
+  border-color: rgba(201, 168, 76, 0.4);
+  border-style: solid;
+}
+
+/* Inner flip container */
 
 .slotInner {
   position: absolute;
   inset: 0;
-  border-radius: 6px;
+  border-radius: 8px;
   transform-style: preserve-3d;
-  transition: transform 0.9s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+  transition: transform 0.85s cubic-bezier(0.68, -0.4, 0.265, 1.4);
   transform: rotateY(180deg);
 }
 
@@ -322,24 +236,57 @@
 .slotBack {
   position: absolute;
   inset: 0;
-  border-radius: 6px;
+  border-radius: 7px;
   backface-visibility: hidden;
+}
+
+/* Front: revealed card */
+
+.slotFront {
+  background: linear-gradient(155deg, #1e0a4a 0%, #0c0625 100%);
+  border: 1.5px solid #c9a84c;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  padding: 5px 4px;
+  gap: 2px;
 }
 
-.slotFront {
-  background: linear-gradient(160deg, #1e0a4a 0%, #0e0628 100%);
-  border: 1.5px solid var(--gold);
-  padding: 6px 4px;
-  text-align: center;
+.cardSym {
+  font-size: 22px;
+  line-height: 1;
 }
+
+.cardName {
+  font-size: 9px;
+  color: #f0d080;
+  font-family: 'Cinzel', 'Georgia', serif;
+  letter-spacing: 0.3px;
+  text-align: center;
+  line-height: 1.2;
+}
+
+.cardNum {
+  font-size: 8px;
+  color: #8b7ab8;
+  font-family: 'Cinzel', 'Georgia', serif;
+}
+
+.cardMeaning {
+  font-size: 7px;
+  color: #b8a8e0;
+  text-align: center;
+  line-height: 1.3;
+  margin-top: 2px;
+  padding: 0 2px;
+}
+
+/* Back: card back design */
 
 .slotBack {
-  background: var(--card-back);
-  border: 1.5px solid var(--card-border);
+  background: #1e1245;
+  border: 1.5px solid #6b4fbb;
   transform: rotateY(180deg);
 }
 
@@ -347,50 +294,20 @@
   content: '';
   position: absolute;
   inset: 3px;
-  border-radius: 3px;
+  border-radius: 4px;
   border: 1px solid rgba(201, 168, 76, 0.2);
-  background: repeating-linear-gradient(
-    45deg,
-    transparent,
-    transparent 6px,
-    rgba(107, 79, 187, 0.06) 6px,
-    rgba(107, 79, 187, 0.06) 7px
-  );
+  background:
+    repeating-linear-gradient(45deg, transparent, transparent 6px, rgba(107,79,187,0.06) 6px, rgba(107,79,187,0.06) 7px),
+    repeating-linear-gradient(-45deg, transparent, transparent 6px, rgba(107,79,187,0.04) 6px, rgba(107,79,187,0.04) 7px);
 }
 
 .slotBack::after {
   content: '✦';
-  font-size: 22px;
-  color: rgba(201, 168, 76, 0.4);
-  position: relative;
-  z-index: 1;
-}
-
-.cardSymbol {
-  font-size: 22px;
-  margin-bottom: 2px;
-}
-
-.cardName {
-  font-size: 9px;
-  color: var(--gold-light);
-  font-family: 'Cinzel', serif;
-  letter-spacing: 0.5px;
-  line-height: 1.3;
-}
-
-.cardNum {
-  font-size: 8px;
-  color: var(--muted);
-  margin-top: 2px;
-}
-
-/* ── Stars ────────────────────────────────────────────────────────────────── */
-
-.star {
-  position: fixed;
-  border-radius: 50%;
-  background: var(--gold-light);
-  pointer-events: none;
-  animation: twinkle 3s infinite;
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  color: rgba(201, 168, 76, 0.35);
 }
