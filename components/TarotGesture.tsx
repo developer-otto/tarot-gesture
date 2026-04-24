@@ -3,9 +3,9 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import styles from './TarotGesture.module.css'
 
-// ─── Data ──────────────────────────────────────────────────────────────────────
+// ─── Tarot Data ────────────────────────────────────────────────────────────────
 
-const TAROT = [
+const TAROT_BASE = [
   { name: '愚者',   num: '0',     sym: '🌟', meaning: '新的开始，无限可能' },
   { name: '魔术师', num: 'I',     sym: '⚡', meaning: '意志力与创造力' },
   { name: '女祭司', num: 'II',    sym: '🌙', meaning: '直觉与内在智慧' },
@@ -32,121 +32,117 @@ const TAROT = [
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
-type AppPhase = 'loading' | 'spread' | 'gather' | 'selecting' | 'countdown'
-type GestureType = 'open' | 'close' | 'one' | 'two' | 'three' | 'four' | 'five' | 'fist' | 'unknown'
+// Phase:
+// 'gather'   — 牌堆汇聚到中间（散乱堆放）
+// 'spread'   — 牌由中间向四周散开，满屏飘动
+// 'selected' — 已有牌被选中，等待握拳结算
+// 'reveal'   — 展示结果（3s后翻牌，10s后重置）
+// 'loading'
+type Phase = 'loading' | 'gather' | 'spread' | 'selected' | 'reveal'
+type Gesture = 'open' | 'close' | 'fist' | 'unknown'
 
-interface CardState {
-  id: number
-  tarot: typeof TAROT[number]
-  tx: number; ty: number; rot: number
-  animPhase: number
+interface Card {
+  uid: number          // unique instance id (allows duplicates)
+  tarot: typeof TAROT_BASE[number]
+  // physics position & velocity
+  x: number; y: number
+  vx: number; vy: number
+  rot: number; vrot: number
+  // target (for gather/spread transitions)
+  tx: number; ty: number; trot: number
+  // animation
+  phase: number        // random phase offset for float
   picked: boolean
   pickOrder: number
+  returning: boolean   // animating back into pile after reveal
 }
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
-const CARD_W = 54
-const CARD_H = 82
-const COOLDOWN = 1400
-const HISTORY_LEN = 10
-const FLOAT_SPEED = 0.0006
-const FLOAT_AMP = 7
-const SLOT_ZONE_H = 148
-const HINT_H = 40
+const TOTAL_CARDS   = 100
+const CARD_W        = 46
+const CARD_H        = 70
+const SLOT_H        = 152  // bottom slot area height
+const HINT_H        = 38   // hint bar height above slot
+const COOLDOWN      = 1200
+const HISTORY       = 10
 
-const STARS = Array.from({ length: 45 }, (_, i) => ({
+// Floating params (spread phase)
+const FLOAT_SPD     = 0.00045
+const FLOAT_AMP     = 5
+const WANDER_FORCE  = 0.012  // small random push each frame
+const DAMPING       = 0.985  // velocity damping
+const WALL_BOUNCE   = 0.4
+
+// Gather/spread lerp speeds
+const LERP_GATHER   = 0.055
+const LERP_SPREAD   = 0.032
+
+const STARS = Array.from({ length: 50 }, (_, i) => ({
   id: i,
   size: Math.random() * 2.5 + 0.5,
   left: Math.random() * 100,
   top: Math.random() * 100,
-  delay: Math.random() * 4,
+  delay: Math.random() * 5,
   dur: 2 + Math.random() * 4,
 }))
 
-// ─── Gesture Detection ─────────────────────────────────────────────────────────
+// ─── Build deck (100 cards, allow repeats, shuffled) ──────────────────────────
 
-function countUp(lm: { x: number; y: number; z: number }[]): number {
-  const tips = [8, 12, 16, 20]
-  const pips = [6, 10, 14, 18]
-  return tips.filter((t, i) => lm[t].y < lm[pips[i]].y).length
-}
-
-function thumbUp(lm: { x: number; y: number; z: number }[]): boolean {
-  return Math.abs(lm[4].x - lm[2].x) > 0.055
-}
-
-function fingerSpread(lm: { x: number; y: number; z: number }[]): number {
-  const tips = [8, 12, 16, 20]
-  let sum = 0
-  for (let i = 0; i < tips.length - 1; i++) {
-    const dx = lm[tips[i]].x - lm[tips[i + 1]].x
-    const dy = lm[tips[i]].y - lm[tips[i + 1]].y
-    sum += Math.sqrt(dx * dx + dy * dy)
+function buildDeck(): Card[] {
+  const deck: Card[] = []
+  for (let i = 0; i < TOTAL_CARDS; i++) {
+    const tarot = TAROT_BASE[i % TAROT_BASE.length]
+    deck.push({
+      uid: i,
+      tarot,
+      x: 0, y: 0,
+      vx: 0, vy: 0,
+      rot: 0, vrot: 0,
+      tx: 0, ty: 0, trot: 0,
+      phase: Math.random() * Math.PI * 2,
+      picked: false,
+      pickOrder: 0,
+      returning: false,
+    })
   }
-  return sum
+  // Fisher-Yates shuffle
+  for (let i = deck.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[deck[i], deck[j]] = [deck[j], deck[i]]
+  }
+  return deck
 }
 
-function detectGesture(lm: { x: number; y: number; z: number }[]): GestureType {
-  const up = countUp(lm)
-  const th = thumbUp(lm)
-  const spread = fingerSpread(lm)
+// ─── Layout helpers ────────────────────────────────────────────────────────────
 
-  if (up === 0 && !th) return 'fist'
-
-  if (up === 4 && th) {
-    if (spread > 0.20) return 'open'   // 五指张开
-    if (spread < 0.10) return 'close'  // 五指并拢
-    return 'five'                       // 五根手指（中间状态）
-  }
-
-  if (!th) {
-    if (up === 1) return 'one'
-    if (up === 2) return 'two'
-    if (up === 3) return 'three'
-    if (up === 4) return 'four'
-  }
-
-  return 'unknown'
+function gatherTargets(cards: Card[], vw: number, vh: number) {
+  // Clustered loosely around center — NOT a neat pile
+  const cx = vw / 2, cy = (vh - SLOT_H - HINT_H) / 2
+  return cards.map((c, i) => {
+    const angle = (i / cards.length) * Math.PI * 2 * 3.7 // spiral
+    const r = 10 + (i / cards.length) * 90
+    return {
+      ...c,
+      tx: cx + Math.cos(angle) * r + (Math.random() - 0.5) * 25,
+      ty: cy + Math.sin(angle) * r * 0.65 + (Math.random() - 0.5) * 25,
+      trot: (Math.random() - 0.5) * 40,
+    }
+  })
 }
 
-// ─── Layout ────────────────────────────────────────────────────────────────────
-
-function spreadPos(idx: number, vw: number, vh: number) {
-  const zone = vh - SLOT_ZONE_H - HINT_H
-  const margin = 28
-  const cols = 11
-  const rows = 2
-  const col = idx % cols
-  const row = Math.floor(idx / cols)
-  const gx = margin + (col / (cols - 1)) * (vw - margin * 2 - CARD_W)
-  const gy = margin + (row / (rows - 1)) * (zone - margin * 2 - CARD_H)
-  return {
-    tx: gx + (Math.random() - 0.5) * 30,
-    ty: gy + (Math.random() - 0.5) * 25,
-    rot: (Math.random() - 0.5) * 65,
-  }
-}
-
-function pilePos(vw: number, vh: number) {
-  const zone = vh - SLOT_ZONE_H - HINT_H
-  return {
-    tx: vw / 2 - CARD_W / 2 + (Math.random() - 0.5) * 50,
-    ty: zone * 0.42 + (Math.random() - 0.5) * 50,
-    rot: (Math.random() - 0.5) * 30,
-  }
-}
-
-function buildDeck(vw: number, vh: number): CardState[] {
-  return TAROT.map((tarot, id) => ({
-    id, tarot,
-    picked: false, pickOrder: 0,
-    animPhase: Math.random() * Math.PI * 2,
-    ...spreadPos(id, vw, vh),
+function spreadTargets(cards: Card[], vw: number, vh: number) {
+  const zone = vh - SLOT_H - HINT_H
+  const margin = CARD_W + 8
+  return cards.map(c => ({
+    ...c,
+    tx: margin + Math.random() * (vw - margin * 2 - CARD_W),
+    ty: margin + Math.random() * (zone - margin * 2 - CARD_H),
+    trot: (Math.random() - 0.5) * 80,
   }))
 }
 
-// ─── Canvas roundRect ──────────────────────────────────────────────────────────
+// ─── Canvas helpers ────────────────────────────────────────────────────────────
 
 function rrect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
   ctx.beginPath()
@@ -162,37 +158,163 @@ function rrect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h
   ctx.closePath()
 }
 
+function drawCard(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, rot: number,
+  alpha: number, glowing: boolean, badge: number,
+  t: number, phase: number
+) {
+  const fx = Math.sin(t * FLOAT_SPD + phase) * FLOAT_AMP
+  const fy = Math.cos(t * FLOAT_SPD * 0.7 + phase + 1.2) * FLOAT_AMP * 0.5
+  const rx = x + fx
+  const ry = y + fy
+  const rr = rot + Math.sin(t * FLOAT_SPD * 0.4 + phase) * 1.5
+
+  ctx.save()
+  ctx.globalAlpha = alpha
+  ctx.translate(rx + CARD_W / 2, ry + CARD_H / 2)
+  ctx.rotate((rr * Math.PI) / 180)
+
+  // Shadow / glow
+  if (glowing) {
+    ctx.shadowColor = 'rgba(201,168,76,0.9)'
+    ctx.shadowBlur = 18
+  } else {
+    ctx.shadowColor = 'rgba(0,0,0,0.5)'
+    ctx.shadowBlur = 5
+    ctx.shadowOffsetY = 2
+  }
+
+  // Fill
+  const g = ctx.createLinearGradient(-CARD_W / 2, -CARD_H / 2, CARD_W / 2, CARD_H / 2)
+  if (glowing) { g.addColorStop(0, '#2e1c66'); g.addColorStop(1, '#1a0f42') }
+  else         { g.addColorStop(0, '#1f1347'); g.addColorStop(1, '#130d30') }
+  ctx.fillStyle = g
+  rrect(ctx, -CARD_W / 2, -CARD_H / 2, CARD_W, CARD_H, 4)
+  ctx.fill()
+  ctx.shadowBlur = 0; ctx.shadowOffsetY = 0
+
+  // Outer border
+  ctx.strokeStyle = glowing ? '#c9a84c' : '#6b4fbb'
+  ctx.lineWidth = glowing ? 1.8 : 1.2
+  rrect(ctx, -CARD_W / 2, -CARD_H / 2, CARD_W, CARD_H, 4)
+  ctx.stroke()
+
+  // Inner border
+  ctx.strokeStyle = glowing ? 'rgba(240,208,128,0.4)' : 'rgba(201,168,76,0.18)'
+  ctx.lineWidth = 0.7
+  rrect(ctx, -CARD_W / 2 + 3, -CARD_H / 2 + 3, CARD_W - 6, CARD_H - 6, 2)
+  ctx.stroke()
+
+  // Center star
+  ctx.fillStyle = glowing ? 'rgba(201,168,76,0.7)' : 'rgba(201,168,76,0.25)'
+  ctx.font = '14px serif'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillText('✦', 0, 0)
+
+  // Pick badge
+  if (badge > 0) {
+    ctx.shadowColor = 'rgba(201,168,76,0.6)'
+    ctx.shadowBlur = 8
+    ctx.fillStyle = '#c9a84c'
+    ctx.beginPath()
+    ctx.arc(-CARD_W / 2 + 9, -CARD_H / 2 + 9, 8, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.shadowBlur = 0
+    ctx.fillStyle = '#0a0614'
+    ctx.font = 'bold 8px monospace'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(String(badge), -CARD_W / 2 + 9, -CARD_H / 2 + 9)
+  }
+
+  ctx.restore()
+}
+
+// ─── Gesture Detection ─────────────────────────────────────────────────────────
+
+function detectFingers(lm: { x: number; y: number; z: number }[]): number {
+  const tips = [8, 12, 16, 20]
+  const pips = [6, 10, 14, 18]
+  return tips.filter((t, i) => lm[t].y < lm[pips[i]].y).length
+}
+
+function thumbOpen(lm: { x: number; y: number; z: number }[]): boolean {
+  return Math.abs(lm[4].x - lm[2].x) > 0.05
+}
+
+function fingerGap(lm: { x: number; y: number; z: number }[]): number {
+  const tips = [8, 12, 16, 20]
+  let sum = 0
+  for (let i = 0; i < tips.length - 1; i++) {
+    const dx = lm[tips[i]].x - lm[tips[i + 1]].x
+    const dy = lm[tips[i]].y - lm[tips[i + 1]].y
+    sum += Math.sqrt(dx * dx + dy * dy)
+  }
+  return sum
+}
+
+function classify(lm: { x: number; y: number; z: number }[]): Gesture {
+  const up = detectFingers(lm)
+  const th = thumbOpen(lm)
+  const gap = fingerGap(lm)
+  if (up === 0 && !th) return 'fist'
+  if (up === 4 && th && gap > 0.18) return 'open'
+  if (up === 4 && th && gap < 0.10) return 'close'
+  return 'unknown'
+}
+
 // ─── Main Component ────────────────────────────────────────────────────────────
 
 export default function TarotGesture() {
-  const videoRef    = useRef<HTMLVideoElement>(null)
-  const camCvRef    = useRef<HTMLCanvasElement>(null)  // mediapipe hidden canvas
-  const cardCvRef   = useRef<HTMLCanvasElement>(null)  // fullscreen card canvas
-  const previewRef  = useRef<HTMLCanvasElement>(null)  // small cam preview
+  const videoRef   = useRef<HTMLVideoElement>(null)
+  const hiddenCvRef = useRef<HTMLCanvasElement>(null)  // mediapipe processing (hidden)
+  const cardCvRef  = useRef<HTMLCanvasElement>(null)   // fullscreen card render
+  const previewRef = useRef<HTMLCanvasElement>(null)   // small camera preview
 
-  const [phase, setPhase]               = useState<AppPhase>('loading')
-  const [camError, setCamError]         = useState(false)
-  const [gesture, setGesture]           = useState<GestureType>('unknown')
-  const [statusMsg, setStatusMsg]       = useState('正在加载...')
-  const [countdown, setCountdown]       = useState(10)
-  const [pickedSnap, setPickedSnap]     = useState<CardState[]>([])
+  const [phase, setPhase]           = useState<Phase>('loading')
+  const [camError, setCamError]     = useState(false)
+  const [gesture, setGesture]       = useState<Gesture>('unknown')
+  const [hint, setHint]             = useState('')
+  const [countdown, setCountdown]   = useState(0)
+  const [pickedSnap, setPickedSnap] = useState<Card[]>([])
 
-  const phaseRef          = useRef<AppPhase>('loading')
-  const cardsRef          = useRef<CardState[]>([])
-  const lastGestureTime   = useRef(0)
-  const histRef           = useRef<GestureType[]>([])
-  const rafRef            = useRef(0)
-  const cdTimerRef        = useRef<ReturnType<typeof setInterval> | null>(null)
-  const cdValueRef        = useRef(10)
-  const vwRef             = useRef(typeof window !== 'undefined' ? window.innerWidth : 1280)
-  const vhRef             = useRef(typeof window !== 'undefined' ? window.innerHeight : 800)
+  // All hot state in refs
+  const phaseRef       = useRef<Phase>('loading')
+  const cardsRef       = useRef<Card[]>([])
+  const histRef        = useRef<Gesture[]>([])
+  const lastTrigger    = useRef(0)
+  const rafRef         = useRef(0)
+  const cdTimer        = useRef<ReturnType<typeof setInterval> | null>(null)
+  const cdVal          = useRef(0)
+  const vwRef          = useRef(1280)
+  const vhRef          = useRef(800)
+  const tRef           = useRef(0)   // animation time accumulator
 
-  // ── helpers ─────────────────────────────────────────────────────────────────
+  // ── phase helper ────────────────────────────────────────────────────────────
 
-  const goPhase = useCallback((p: AppPhase) => {
+  const goPhase = useCallback((p: Phase) => {
     phaseRef.current = p
     setPhase(p)
   }, [])
+
+  // ── smooth gesture ───────────────────────────────────────────────────────────
+
+  const smooth = useCallback((g: Gesture): Gesture => {
+    const h = histRef.current
+    h.push(g)
+    if (h.length > HISTORY) h.shift()
+    const cnt: Partial<Record<Gesture, number>> = {}
+    h.forEach(x => { cnt[x] = (cnt[x] || 0) + 1 })
+    let best: Gesture = 'unknown', bestN = 0
+    ;(Object.entries(cnt) as [Gesture, number][]).forEach(([k, v]) => {
+      if (v > bestN) { best = k as Gesture; bestN = v }
+    })
+    return bestN >= Math.floor(HISTORY * 0.55) ? best : 'unknown'
+  }, [])
+
+  // ── sync picked snap to react state ─────────────────────────────────────────
 
   const syncPicked = useCallback(() => {
     const snap = cardsRef.current
@@ -201,202 +323,127 @@ export default function TarotGesture() {
     setPickedSnap([...snap])
   }, [])
 
-  // ── smooth gesture ───────────────────────────────────────────────────────────
-
-  const smooth = useCallback((g: GestureType): GestureType => {
-    const h = histRef.current
-    h.push(g)
-    if (h.length > HISTORY_LEN) h.shift()
-    const cnt: Partial<Record<GestureType, number>> = {}
-    h.forEach(x => { cnt[x] = (cnt[x] || 0) + 1 })
-    let best: GestureType = 'unknown', bestN = 0
-    ;(Object.entries(cnt) as [GestureType, number][]).forEach(([k, v]) => {
-      if (v > bestN) { best = k as GestureType; bestN = v }
-    })
-    return bestN >= Math.floor(HISTORY_LEN * 0.55) ? best : 'unknown'
-  }, [])
-
-  // ── spread ───────────────────────────────────────────────────────────────────
+  // ── SPREAD: cards fly outward from center ────────────────────────────────────
 
   const doSpread = useCallback(() => {
     const vw = vwRef.current, vh = vhRef.current
-    cardsRef.current = buildDeck(vw, vh)
+    cardsRef.current = spreadTargets(cardsRef.current, vw, vh)
     goPhase('spread')
-    setStatusMsg('五指张开散牌  ·  五指并拢洗牌  ·  伸出 1-5 根手指选牌')
-    setPickedSnap([])
+    setHint('五指张开散牌  ·  五指并拢聚合')
   }, [goPhase])
 
-  // ── gather ───────────────────────────────────────────────────────────────────
+  // ── GATHER: cards fly inward, loosely clustered ──────────────────────────────
 
-  const doGather = useCallback(() => {
+  const doGather = useCallback((thenSpread = false) => {
     const vw = vwRef.current, vh = vhRef.current
-    cardsRef.current = cardsRef.current.map(c => ({
-      ...c, picked: false, pickOrder: 0, ...pilePos(vw, vh),
-    }))
+    cardsRef.current = gatherTargets(
+      cardsRef.current.map(c => ({ ...c, picked: false, pickOrder: 0, returning: false })),
+      vw, vh
+    )
     goPhase('gather')
-    setStatusMsg('牌堆聚合，重新洗牌中...')
+    setHint(thenSpread ? '洗牌中...' : '五指并拢聚合  ·  五指张开散开')
     setPickedSnap([])
-    setTimeout(() => {
-      if (phaseRef.current === 'gather') doSpread()
-    }, 1800)
+    if (thenSpread) {
+      setTimeout(() => {
+        if (phaseRef.current === 'gather') doSpread()
+      }, 2200)
+    }
   }, [goPhase, doSpread])
 
-  // ── pick N ───────────────────────────────────────────────────────────────────
+  // ── PICK: fist → pick random 1-5 cards from gathered pile ────────────────────
 
-  const doPick = useCallback((n: number) => {
+  const doPick = useCallback(() => {
+    if (phaseRef.current !== 'gather') return
     const now = Date.now()
-    if (now - lastGestureTime.current < COOLDOWN) return
-    if (phaseRef.current !== 'spread' && phaseRef.current !== 'selecting') return
+    if (now - lastTrigger.current < COOLDOWN) return
+    lastTrigger.current = now
 
-    const available = cardsRef.current
-    const shuffled = [...available].sort(() => Math.random() - 0.5)
-    const chosen = new Set(shuffled.slice(0, n).map(c => c.id))
+    // How many: 1-5 based on time since last action (or random)
+    const n = Math.floor(Math.random() * 5) + 1
 
-    cardsRef.current = cardsRef.current.map(c => ({
-      ...c,
-      picked: chosen.has(c.id),
-      pickOrder: chosen.has(c.id)
-        ? shuffled.findIndex(s => s.id === c.id) + 1
-        : 0,
-    }))
+    const shuffled = [...cardsRef.current].sort(() => Math.random() - 0.5)
+    const chosenIds = new Set(shuffled.slice(0, n).map(c => c.uid))
 
-    goPhase('selecting')
-    setStatusMsg(`已选 ${n} 张牌  ·  握拳开始结算  ·  继续比划可更换`)
+    let order = 0
+    cardsRef.current = cardsRef.current.map(c => {
+      if (chosenIds.has(c.uid)) {
+        order++
+        return { ...c, picked: true, pickOrder: order }
+      }
+      return { ...c, picked: false, pickOrder: 0 }
+    })
+
+    goPhase('selected')
+    setHint(`已选 ${n} 张  ·  握拳开始结算`)
     syncPicked()
-    lastGestureTime.current = now
   }, [goPhase, syncPicked])
 
-  // ── reveal / countdown ───────────────────────────────────────────────────────
+  // ── REVEAL: show result, countdown, then reset ────────────────────────────────
 
   const doReveal = useCallback(() => {
+    if (phaseRef.current !== 'selected') return
     const now = Date.now()
-    if (now - lastGestureTime.current < COOLDOWN) return
-    if (phaseRef.current !== 'selecting') return
-    const picked = cardsRef.current.filter(c => c.picked)
-    if (picked.length === 0) return
+    if (now - lastTrigger.current < COOLDOWN) return
+    lastTrigger.current = now
 
-    lastGestureTime.current = now
-    goPhase('countdown')
-    setStatusMsg('命运揭晓')
-    cdValueRef.current = 10
+    goPhase('reveal')
+    setHint('命运揭晓')
+    cdVal.current = 10
     setCountdown(10)
-    if (cdTimerRef.current) clearInterval(cdTimerRef.current)
-    cdTimerRef.current = setInterval(() => {
-      cdValueRef.current -= 1
-      setCountdown(cdValueRef.current)
-      if (cdValueRef.current <= 0) {
-        if (cdTimerRef.current) clearInterval(cdTimerRef.current)
-        doSpread()
+
+    if (cdTimer.current) clearInterval(cdTimer.current)
+    cdTimer.current = setInterval(() => {
+      cdVal.current -= 1
+      setCountdown(cdVal.current)
+      if (cdVal.current <= 0) {
+        if (cdTimer.current) clearInterval(cdTimer.current)
+        // Return picked cards to deck positions, then gather+spread
+        cardsRef.current = cardsRef.current.map(c => ({
+          ...c, picked: false, pickOrder: 0, returning: true,
+        }))
+        setPickedSnap([])
+        setTimeout(() => {
+          doGather(true)
+        }, 800)
       }
     }, 1000)
-  }, [goPhase, doSpread])
+  }, [goPhase, doGather])
 
-  // ── handle gesture ───────────────────────────────────────────────────────────
+  // ── Handle gesture ───────────────────────────────────────────────────────────
 
-  const handleGesture = useCallback((g: GestureType) => {
+  const handleGesture = useCallback((g: Gesture) => {
     setGesture(g)
     const ph = phaseRef.current
-    if (ph === 'loading' || ph === 'countdown' || ph === 'gather') return
     const now = Date.now()
+    const cool = now - lastTrigger.current > COOLDOWN
 
-    if (g === 'open' && now - lastGestureTime.current > COOLDOWN) {
-      doSpread(); lastGestureTime.current = now
-    } else if (g === 'close' && now - lastGestureTime.current > COOLDOWN) {
-      doGather(); lastGestureTime.current = now
-    } else if (g === 'fist') {
-      doReveal()
-    } else if (ph === 'spread' || ph === 'selecting') {
-      const map: Partial<Record<GestureType, number>> = {
-        one: 1, two: 2, three: 3, four: 4, five: 5,
-      }
-      const n = map[g]
-      if (n) doPick(n)
+    if (ph === 'loading' || ph === 'reveal') return
+
+    if (ph === 'selected') {
+      // Only fist allowed → reveal
+      if (g === 'fist') doReveal()
+      return
     }
-  }, [doSpread, doGather, doReveal, doPick])
 
-  // ── Canvas render loop ───────────────────────────────────────────────────────
+    if (g === 'open' && cool) {
+      doSpread(); lastTrigger.current = now
+    } else if (g === 'close' && cool) {
+      doGather(false); lastTrigger.current = now
+    } else if (g === 'fist' && ph === 'gather') {
+      doPick()
+    }
+  }, [doSpread, doGather, doPick, doReveal])
+
+  // ── Canvas animation loop ────────────────────────────────────────────────────
 
   useEffect(() => {
     const canvas = cardCvRef.current
     if (!canvas) return
     const ctx = canvas.getContext('2d')!
-    let t = 0
 
-    const drawOne = (card: CardState, alpha: number, glowing: boolean) => {
-      const fx = Math.sin(t * FLOAT_SPEED + card.animPhase) * FLOAT_AMP
-      const fy = Math.cos(t * FLOAT_SPEED * 0.73 + card.animPhase + 1.2) * FLOAT_AMP * 0.55
-      const rOff = Math.sin(t * FLOAT_SPEED * 0.45 + card.animPhase) * 1.8
-      const x = card.tx + fx
-      const y = card.ty + fy
-      const r = (card.rot + rOff) * Math.PI / 180
-
-      ctx.save()
-      ctx.globalAlpha = alpha
-      ctx.translate(x + CARD_W / 2, y + CARD_H / 2)
-      ctx.rotate(r)
-
-      if (glowing) {
-        ctx.shadowColor = 'rgba(201,168,76,0.85)'
-        ctx.shadowBlur = 22
-      } else {
-        ctx.shadowColor = 'rgba(0,0,0,0.55)'
-        ctx.shadowBlur = 7
-        ctx.shadowOffsetY = 3
-      }
-
-      // Card fill
-      const g2 = ctx.createLinearGradient(-CARD_W / 2, -CARD_H / 2, CARD_W / 2, CARD_H / 2)
-      if (glowing) {
-        g2.addColorStop(0, '#2b1a60')
-        g2.addColorStop(1, '#190f40')
-      } else {
-        g2.addColorStop(0, '#1f1347')
-        g2.addColorStop(1, '#130d30')
-      }
-      ctx.fillStyle = g2
-      rrect(ctx, -CARD_W / 2, -CARD_H / 2, CARD_W, CARD_H, 5)
-      ctx.fill()
-
-      ctx.shadowBlur = 0; ctx.shadowOffsetY = 0
-
-      // Outer border
-      ctx.strokeStyle = glowing ? '#c9a84c' : '#6b4fbb'
-      ctx.lineWidth = glowing ? 2 : 1.5
-      rrect(ctx, -CARD_W / 2, -CARD_H / 2, CARD_W, CARD_H, 5)
-      ctx.stroke()
-
-      // Inner border
-      ctx.strokeStyle = glowing ? 'rgba(240,208,128,0.45)' : 'rgba(201,168,76,0.2)'
-      ctx.lineWidth = 0.8
-      rrect(ctx, -CARD_W / 2 + 4, -CARD_H / 2 + 4, CARD_W - 8, CARD_H - 8, 3)
-      ctx.stroke()
-
-      // Center symbol
-      ctx.fillStyle = glowing ? 'rgba(201,168,76,0.65)' : 'rgba(201,168,76,0.28)'
-      ctx.font = '17px serif'
-      ctx.textAlign = 'center'
-      ctx.textBaseline = 'middle'
-      ctx.fillText('✦', 0, 0)
-
-      // Pick order badge
-      if (glowing && card.pickOrder > 0) {
-        ctx.fillStyle = '#c9a84c'
-        ctx.beginPath()
-        ctx.arc(-CARD_W / 2 + 10, -CARD_H / 2 + 10, 9, 0, Math.PI * 2)
-        ctx.fill()
-        ctx.fillStyle = '#0a0614'
-        ctx.font = 'bold 10px monospace'
-        ctx.textAlign = 'center'
-        ctx.textBaseline = 'middle'
-        ctx.fillText(String(card.pickOrder), -CARD_W / 2 + 10, -CARD_H / 2 + 10)
-      }
-
-      ctx.restore()
-    }
-
-    const frame = () => {
+    const frame = (ts: number) => {
       rafRef.current = requestAnimationFrame(frame)
-      t += 16
+      tRef.current = ts
 
       const vw = window.innerWidth
       const vh = window.innerHeight
@@ -405,27 +452,71 @@ export default function TarotGesture() {
       canvas.width = vw
       canvas.height = vh
 
-      ctx.clearRect(0, 0, vw, vh)
-
+      const zone = vh - SLOT_H - HINT_H
+      const ph = phaseRef.current
       const cards = cardsRef.current
+      ctx.clearRect(0, 0, vw, vh)
       if (!cards.length) return
 
-      const ph = phaseRef.current
+      // Update card physics
+      for (let i = 0; i < cards.length; i++) {
+        const c = cards[i]
+
+        if (ph === 'spread' && !c.picked) {
+          // Wander: apply small random force + lerp toward target
+          c.vx += (Math.random() - 0.5) * WANDER_FORCE
+          c.vy += (Math.random() - 0.5) * WANDER_FORCE
+          // Gentle lerp toward target
+          c.vx += (c.tx - c.x) * 0.001
+          c.vy += (c.ty - c.y) * 0.001
+          c.vx *= DAMPING
+          c.vy *= DAMPING
+          c.vrot += (c.trot - c.rot) * 0.002
+          c.vrot *= 0.95
+          c.x += c.vx
+          c.y += c.vy
+          c.rot += c.vrot
+          // Wall bounce
+          if (c.x < 0)          { c.x = 0; c.vx = Math.abs(c.vx) * WALL_BOUNCE }
+          if (c.x > vw - CARD_W){ c.x = vw - CARD_W; c.vx = -Math.abs(c.vx) * WALL_BOUNCE }
+          if (c.y < 0)          { c.y = 0; c.vy = Math.abs(c.vy) * WALL_BOUNCE }
+          if (c.y > zone - CARD_H){ c.y = zone - CARD_H; c.vy = -Math.abs(c.vy) * WALL_BOUNCE }
+
+        } else if (ph === 'gather' || ph === 'selected') {
+          // Lerp to target
+          const spd = ph === 'gather' ? LERP_GATHER : LERP_GATHER * 0.5
+          c.x += (c.tx - c.x) * spd
+          c.y += (c.ty - c.y) * spd
+          c.rot += (c.trot - c.rot) * spd
+
+        } else if (ph === 'reveal') {
+          // Non-picked slowly drift to corners
+          if (!c.picked) {
+            c.x += (c.tx - c.x) * 0.03
+            c.y += (c.ty - c.y) * 0.03
+          }
+        }
+      }
+
+      // Draw order: non-picked first, picked on top
       const nonPicked = cards.filter(c => !c.picked)
-      const picked = cards.filter(c => c.picked).sort((a, b) => a.pickOrder - b.pickOrder)
+      const picked    = cards.filter(c => c.picked).sort((a, b) => a.pickOrder - b.pickOrder)
 
-      const spreading = ph === 'spread'
-      const selecting = ph === 'selecting' || ph === 'countdown'
+      const dimNonPicked = (ph === 'selected' || ph === 'reveal')
 
-      nonPicked.forEach(c => drawOne(c, selecting ? 0.35 : 1, false))
-      picked.forEach(c => drawOne(c, 1, true))
+      nonPicked.forEach(c => {
+        drawCard(ctx, c.x, c.y, c.rot, dimNonPicked ? 0.25 : 0.9, false, 0, ts, c.phase)
+      })
+      picked.forEach(c => {
+        drawCard(ctx, c.x, c.y, c.rot, 1, true, c.pickOrder, ts, c.phase)
+      })
     }
 
     rafRef.current = requestAnimationFrame(frame)
     return () => cancelAnimationFrame(rafRef.current)
   }, [])
 
-  // ── MediaPipe ─────────────────────────────────────────────────────────────────
+  // ── MediaPipe init ───────────────────────────────────────────────────────────
 
   useEffect(() => {
     let camera: any = null, hands: any = null
@@ -438,47 +529,66 @@ export default function TarotGesture() {
           import('@mediapipe/drawing_utils'),
         ])
 
-      const video = videoRef.current
-      const camCv = camCvRef.current
-      const preview = previewRef.current
-      if (!video || !camCv) return
-      const ctx = camCv.getContext('2d')!
+      const video    = videoRef.current
+      const hiddenCv = hiddenCvRef.current
+      const preview  = previewRef.current
+      if (!video || !hiddenCv) return
+
+      const hCtx = hiddenCv.getContext('2d')!
       const pCtx = preview?.getContext('2d') || null
 
       hands = new Hands({ locateFile: (f: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` })
       hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.65, minTrackingConfidence: 0.55 })
-      hands.onResults((res: any) => {
-        ctx.save()
-        ctx.clearRect(0, 0, camCv.width, camCv.height)
-        ctx.drawImage(res.image, 0, 0, camCv.width, camCv.height)
 
-        // Mirror draw to preview
+      hands.onResults((res: any) => {
+        hCtx.save()
+        hCtx.clearRect(0, 0, hiddenCv.width, hiddenCv.height)
+        hCtx.drawImage(res.image, 0, 0, hiddenCv.width, hiddenCv.height)
+
+        // Mirror to preview
         if (pCtx && preview) {
           pCtx.save()
           pCtx.clearRect(0, 0, preview.width, preview.height)
           pCtx.translate(preview.width, 0)
           pCtx.scale(-1, 1)
-          pCtx.drawImage(camCv, 0, 0, preview.width, preview.height)
+          pCtx.drawImage(hiddenCv, 0, 0, preview.width, preview.height)
+          if (res.multiHandLandmarks?.length > 0) {
+            // Scale landmarks to preview size
+            const lm = res.multiHandLandmarks[0].map((p: any) => ({
+              x: (1 - p.x) * preview.width,
+              y: p.y * preview.height,
+              z: p.z,
+            }))
+            // Draw on pCtx directly
+            const conn = HAND_CONNECTIONS as [number, number][]
+            pCtx.strokeStyle = 'rgba(201,168,76,0.6)'
+            pCtx.lineWidth = 1.5
+            conn.forEach(([a, b]) => {
+              pCtx.beginPath()
+              pCtx.moveTo(lm[a].x, lm[a].y)
+              pCtx.lineTo(lm[b].x, lm[b].y)
+              pCtx.stroke()
+            })
+            lm.forEach((p: any) => {
+              pCtx.beginPath()
+              pCtx.arc(p.x, p.y, 2.5, 0, Math.PI * 2)
+              pCtx.fillStyle = 'rgba(240,208,128,0.85)'
+              pCtx.fill()
+            })
+          }
           pCtx.restore()
         }
 
         if (res.multiHandLandmarks?.length > 0) {
           const lm = res.multiHandLandmarks[0]
-          drawConnectors(ctx, lm, HAND_CONNECTIONS, { color: 'rgba(201,168,76,0.5)', lineWidth: 1.5 })
-          drawLandmarks(ctx, lm, { color: 'rgba(240,208,128,0.7)', lineWidth: 1, radius: 2 })
-          handleGesture(smooth(detectGesture(lm)))
+          drawConnectors(hCtx, lm, HAND_CONNECTIONS, { color: 'rgba(201,168,76,0.4)', lineWidth: 1.5 })
+          drawLandmarks(hCtx, lm, { color: 'rgba(240,208,128,0.7)', lineWidth: 1, radius: 2 })
+          handleGesture(smooth(classify(lm)))
         } else {
           smooth('unknown')
           setGesture('unknown')
-          if (pCtx && preview) {
-            pCtx.save()
-            pCtx.translate(preview.width, 0)
-            pCtx.scale(-1, 1)
-            pCtx.drawImage(camCv, 0, 0, preview.width, preview.height)
-            pCtx.restore()
-          }
         }
-        ctx.restore()
+        hCtx.restore()
       })
 
       camera = new Camera(video, {
@@ -492,38 +602,41 @@ export default function TarotGesture() {
         setCamError(true)
       }
 
-      // Init cards
+      // Init deck
       const vw = window.innerWidth, vh = window.innerHeight
       vwRef.current = vw; vhRef.current = vh
-      cardsRef.current = buildDeck(vw, vh)
-      goPhase('spread')
-      setStatusMsg('五指张开散牌  ·  五指并拢洗牌  ·  伸出 1-5 根手指选牌')
+      const deck = buildDeck()
+      // Start all cards at center
+      const cx = vw / 2, cy = (vh - SLOT_H - HINT_H) / 2
+      deck.forEach(c => { c.x = cx + (Math.random()-0.5)*60; c.y = cy + (Math.random()-0.5)*60 })
+      cardsRef.current = gatherTargets(deck, vw, vh)
+      goPhase('gather')
+      setHint('五指张开散开牌堆  ·  五指并拢聚合')
     }
 
     load()
     return () => {
       camera?.stop()
       hands?.close()
-      if (cdTimerRef.current) clearInterval(cdTimerRef.current)
+      if (cdTimer.current) clearInterval(cdTimer.current)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // ── Gesture label ─────────────────────────────────────────────────────────────
+  // ── Gesture label ────────────────────────────────────────────────────────────
 
-  const GLABELS: Record<GestureType, string> = {
-    open: '✋ 散开', close: '🤲 并拢',
-    one: '☝️ 选1', two: '✌️ 选2', three: '🤟 选3', four: '🖖 选4', five: '🖐 选5',
-    fist: '✊ 结算', unknown: '—',
+  const GL: Record<Gesture, string> = {
+    open: '✋ 张开', close: '🤲 并拢', fist: '✊ 握拳', unknown: '—',
   }
 
-  const isRevealing = phase === 'countdown'
+  const isReveal = phase === 'reveal'
+  const countdownPct = countdown / 10
 
   // ─── Render ────────────────────────────────────────────────────────────────
 
   return (
     <div className={styles.app}>
-      {/* Stars */}
+      {/* Starfield */}
       {STARS.map(s => (
         <div key={s.id} className={styles.star} style={{
           width: s.size, height: s.size,
@@ -533,60 +646,71 @@ export default function TarotGesture() {
       ))}
 
       <video ref={videoRef} style={{ display: 'none' }} />
-      <canvas ref={camCvRef} width={320} height={240} style={{ display: 'none' }} />
+      <canvas ref={hiddenCvRef} width={320} height={240} style={{ display: 'none' }} />
 
       {/* Full-screen card canvas */}
       <canvas ref={cardCvRef} className={styles.cardCanvas} />
 
-      {/* Cam preview — top-right */}
-      <div className={styles.camPreviewWrap}>
-        <canvas ref={previewRef} className={styles.camPreview} width={160} height={120} />
-        <div className={styles.gestureLabel}>{GLABELS[gesture]}</div>
+      {/* Camera preview — top right */}
+      <div className={styles.preview}>
+        <canvas ref={previewRef} className={styles.previewCv} width={160} height={120} />
+        <div className={styles.gestureTag}>{GL[gesture]}</div>
       </div>
 
-      {/* Error badge */}
-      {camError && <div className={styles.camError}>摄像头未启动</div>}
+      {/* Cam error */}
+      {camError && <div className={styles.camErr}>摄像头未启动</div>}
 
       {/* Loading */}
       {phase === 'loading' && (
-        <div className={styles.loadingOverlay}>
+        <div className={styles.loading}>
           <div className={styles.spinner} />
           <div className={styles.loadTitle}>ARCANA</div>
-          <div className={styles.loadHint}>正在加载手势识别...</div>
+          <div className={styles.loadSub}>正在加载手势识别...</div>
         </div>
       )}
 
-      {/* Hint bar — just above slot zone */}
+      {/* Hint bar */}
       <div className={styles.hintBar}>
-        <span className={styles.hintText}>{statusMsg}</span>
-        {phase === 'countdown' && (
-          <span className={styles.cdBadge}>{countdown}</span>
+        <span className={styles.hintText}>{hint}</span>
+        {phase === 'reveal' && countdown > 0 && (
+          <div className={styles.cdWrap}>
+            <svg className={styles.cdRing} viewBox="0 0 36 36">
+              <circle cx="18" cy="18" r="15" fill="none" stroke="rgba(201,168,76,0.15)" strokeWidth="2.5" />
+              <circle
+                cx="18" cy="18" r="15" fill="none"
+                stroke="#c9a84c" strokeWidth="2.5"
+                strokeDasharray={`${2 * Math.PI * 15}`}
+                strokeDashoffset={`${2 * Math.PI * 15 * (1 - countdownPct)}`}
+                strokeLinecap="round"
+                transform="rotate(-90 18 18)"
+                style={{ transition: 'stroke-dashoffset 0.9s linear' }}
+              />
+            </svg>
+            <span className={styles.cdNum}>{countdown}</span>
+          </div>
         )}
       </div>
 
-      {/* Slot zone — bottom */}
+      {/* Slot zone */}
       <div className={styles.slotZone}>
         <div className={styles.slots}>
           {Array.from({ length: 5 }).map((_, i) => {
             const card = pickedSnap[i] || null
             return (
-              <div
-                key={i}
-                className={`${styles.slot} ${card ? styles.slotFilled : ''} ${card && isRevealing ? styles.slotRevealed : ''}`}
-              >
+              <div key={i} className={`${styles.slot} ${card ? styles.slotFilled : ''} ${card && isReveal ? styles.slotRevealed : ''}`}>
                 {card ? (
                   <div className={styles.slotInner}>
                     <div className={styles.slotFront}>
-                      <div className={styles.cardSym}>{card.tarot.sym}</div>
-                      <div className={styles.cardName}>{card.tarot.name}</div>
-                      <div className={styles.cardNum}>{card.tarot.num}</div>
-                      {isRevealing && <div className={styles.cardMeaning}>{card.tarot.meaning}</div>}
+                      <div className={styles.cSym}>{card.tarot.sym}</div>
+                      <div className={styles.cName}>{card.tarot.name}</div>
+                      <div className={styles.cNum}>{card.tarot.num}</div>
+                      {isReveal && <div className={styles.cMeaning}>{card.tarot.meaning}</div>}
                     </div>
                     <div className={styles.slotBack} />
                   </div>
                 ) : (
                   <div className={styles.slotEmpty}>
-                    <span className={styles.slotIdx}>{['I','II','III','IV','V'][i]}</span>
+                    <span className={styles.slotI}>{['I','II','III','IV','V'][i]}</span>
                   </div>
                 )}
               </div>
