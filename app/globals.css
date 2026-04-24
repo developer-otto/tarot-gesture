@@ -1,0 +1,56 @@
+@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Noto+Serif+SC:wght@300;400;600&display=swap');
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+:root {
+  --gold: #c9a84c;
+  --gold-light: #f0d080;
+  --deep: #0a0614;
+  --mid: #12092a;
+  --surface: #1a0f35;
+  --card-back: #1e1245;
+  --card-border: #6b4fbb;
+  --text: #e8d9ff;
+  --muted: #8b7ab8;
+  --accent: #9b6dff;
+}
+
+html,
+body {
+  background: var(--deep);
+  color: var(--text);
+  font-family: 'Noto Serif SC', serif;
+  height: 100%;
+  overflow: hidden;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(ellipse at 20% 50%, rgba(80, 40, 160, 0.15) 0%, transparent 60%),
+    radial-gradient(ellipse at 80% 20%, rgba(60, 20, 120, 0.12) 0%, transparent 50%),
+    radial-gradient(ellipse at 50% 80%, rgba(40, 10, 100, 0.1) 0%, transparent 40%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+@keyframes twinkle {
+  0%, 100% { opacity: 0.1; transform: scale(1); }
+  50%       { opacity: 0.6; transform: scale(1.5); }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes grab-burst {
+  0%   { transform: scale(1);   opacity: 1; }
+  50%  { transform: scale(1.4); opacity: 0.6; }
+  100% { transform: scale(0);   opacity: 0; }
+}
